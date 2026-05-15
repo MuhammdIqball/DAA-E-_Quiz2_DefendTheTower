@@ -1,11 +1,57 @@
 """
 entities.py
 ===========
-Berisi class Tower dan Enemy untuk game Tower Defense.
+Berisi class Tower, Enemy, dan Timer untuk game Tower Defense.
 """
 
 import pygame
 import math
+
+
+class Timer:
+    """
+    Timer: mengelola hitungan mundur fase persiapan (Preparation Phase).
+
+    Berbasis frame count agar sinkron dengan game loop dan tidak bergantung
+    pada wall-clock time (yang bisa tidak konsisten saat frame drop).
+    """
+
+    def __init__(self, duration_seconds, fps):
+        """
+        Parameter:
+        ----------
+        duration_seconds : int  - durasi hitungan mundur dalam detik
+        fps              : int  - frame per second game loop
+        """
+        self.fps              = fps
+        self.total_frames     = duration_seconds * fps
+        self.remaining_frames = self.total_frames
+        self.finished         = False
+
+    def update(self):
+        """Kurangi satu frame per tick. Set finished=True saat habis."""
+        if not self.finished:
+            self.remaining_frames -= 1
+            if self.remaining_frames <= 0:
+                self.remaining_frames = 0
+                self.finished         = True
+
+    def seconds_left(self):
+        """Kembalikan detik tersisa (dibulatkan ke atas)."""
+        return math.ceil(self.remaining_frames / self.fps)
+
+    def reset(self, duration_seconds=None):
+        """Reset timer; gunakan durasi baru jika diberikan."""
+        if duration_seconds is not None:
+            self.total_frames = duration_seconds * self.fps
+        self.remaining_frames = self.total_frames
+        self.finished         = False
+
+    def progress(self):
+        """Kembalikan float 0.0–1.0 representasi kemajuan (0=awal, 1=selesai)."""
+        if self.total_frames == 0:
+            return 1.0
+        return 1.0 - (self.remaining_frames / self.total_frames)
 
 
 class Tower:
