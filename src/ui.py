@@ -64,9 +64,8 @@ class MainMenu:
 
         cx = SCREEN_W // 2
         bw, bh = 260, 52
-        self.btn_start = Button((cx - bw // 2, 250, bw, bh), "Start Game",    self.font_btn)
-        self.btn_instr = Button((cx - bw // 2, 318, bw, bh), "Instructions",  self.font_btn)
-        self.btn_exit  = Button((cx - bw // 2, 386, bw, bh), "Exit",          self.font_btn)
+        self.btn_start = Button((cx - bw // 2, 270, bw, bh), "Start Game", self.font_btn)
+        self.btn_exit  = Button((cx - bw // 2, 338, bw, bh), "Exit",       self.font_btn)
 
     def handle_event(self, event):
         """
@@ -77,7 +76,6 @@ class MainMenu:
           None           → tidak ada aksi
         """
         if self.btn_start.handle_event(event): return "start"
-        if self.btn_instr.handle_event(event): return "instructions"
         if self.btn_exit.handle_event(event):  return "exit"
         return None
 
@@ -91,7 +89,6 @@ class MainMenu:
         self.screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 178))
 
         self.btn_start.draw(self.screen)
-        self.btn_instr.draw(self.screen)
         self.btn_exit.draw(self.screen)
 
 

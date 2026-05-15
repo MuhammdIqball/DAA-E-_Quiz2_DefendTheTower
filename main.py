@@ -22,11 +22,12 @@ Pembagian modul:
 
 import pygame
 import sys
+import time
 
 from pathfinding import find_shortest_path, dijkstra
 from entities import Tower
 from src.levels import LEVEL_CONFIGS, MAX_LEVEL, build_grid
-from src.ui import MainMenu, InstructionsScreen, LevelTransition
+from src.ui import MainMenu, LevelTransition
 
 # =============================================================================
 #  KONSTANTA
@@ -41,7 +42,6 @@ FPS = 60
 
 # -- Game States --------------------------------------------------------------
 STATE_MENU         = "menu"
-STATE_INSTRUCTIONS = "instructions"
 STATE_PREP         = "prep"
 STATE_WIN          = "win"
 STATE_LOSE         = "lose"
@@ -80,9 +80,8 @@ class Game:
         self.font_bold = pygame.font.SysFont("consolas", 15, bold=True)
 
         # -- UI screens -------------------------------------------------------
-        self.main_menu    = MainMenu(self.screen)
-        self.instr_screen = InstructionsScreen(self.screen)
-        self.level_trans  = None
+        self.main_menu   = MainMenu(self.screen)
+        self.level_trans = None
 
         # -- Game state -------------------------------------------------------
         self.state         = STATE_MENU
@@ -121,6 +120,7 @@ class Game:
         self.grid          = build_grid(level_num)
         self.towers        = []
         self.failure_path  = None
+        self.dijkstra_time_ms = None   # waktu eksekusi Dijkstra terakhir (ms)
         self.current_path  = find_shortest_path(
             self.grid, self.spawn_pos, self.base_pos, ROWS, COLS)
 
@@ -145,16 +145,9 @@ class Game:
                 action = self.main_menu.handle_event(event)
                 if action == "start":
                     self._load_level(1)
-                elif action == "instructions":
-                    self.state = STATE_INSTRUCTIONS
                 elif action == "exit":
                     pygame.quit()
                     sys.exit()
-
-            # ---- INSTRUCTIONS -----------------------------------------------
-            elif self.state == STATE_INSTRUCTIONS:
-                if self.instr_screen.handle_event(event):
-                    self.state = STATE_MENU
 
             # ---- LEVEL TRANSITION -------------------------------------------
             elif self.state == STATE_LEVEL_TRANS:
@@ -274,7 +267,9 @@ class Game:
         self.dragging      = False
         self.dragged_cells = set()
 
+        t0     = time.perf_counter()
         result = dijkstra(self.grid, self.spawn_pos, self.base_pos, ROWS, COLS)
+        self.dijkstra_time_ms = (time.perf_counter() - t0) * 1000
 
         if result is None:
             # Dijkstra: Base tidak reachable → level clear!
@@ -447,6 +442,13 @@ class Game:
         hint1 = font_small.render("Jalur merah = rute yang ditemukan Dijkstra.", True, (200, 150, 130))
         hint2 = font_small.render("R = Coba lagi  |  ESC = Menu Utama", True, C_HUD_TEXT)
 
+        # Waktu eksekusi Dijkstra
+        if self.dijkstra_time_ms is not None:
+            t_str  = f"Dijkstra: {self.dijkstra_time_ms:.4f} ms"
+            t_surf = font_small.render(t_str, True, (160, 200, 255))
+        else:
+            t_surf = None
+
         cx = SCREEN_W // 2
         cy = SCREEN_H // 2
 
@@ -455,6 +457,8 @@ class Game:
         if self.state == STATE_LOSE:
             self.screen.blit(hint1, (cx - hint1.get_width() // 2, cy + 22))
         self.screen.blit(hint2, (cx - hint2.get_width() // 2, cy + 52))
+        if t_surf:
+            self.screen.blit(t_surf, (cx - t_surf.get_width() // 2, cy + 82))
 
     # =========================================================================
     #  GAME LOOP UTAMA
@@ -466,9 +470,6 @@ class Game:
 
             if self.state == STATE_MENU:
                 self.main_menu.draw()
-
-            elif self.state == STATE_INSTRUCTIONS:
-                self.instr_screen.draw()
 
             elif self.state == STATE_LEVEL_TRANS:
                 if self.level_trans:
