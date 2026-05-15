@@ -5,15 +5,17 @@ Entry point game Tower Defense berbasis algoritma BFS.
 
 Tanggung jawab modul ini:
 - Inisialisasi Pygame & window
-- Game loop utama (handle event → update → render)
-- Penanganan klik mouse (penempatan tower + validasi BFS)
-- Rendering grafis (grid, path, entities, HUD)
-- Game State Manager: PREP → BATTLE → WIN / LOSE
+- Game loop utama (handle event -> update -> render)
+- State Manager: MENU -> INSTRUCTIONS -> PREP -> BATTLE -> WIN/LOSE/LEVEL_TRANS
+- Level transition (Level 1 -> Level 2)
+- Drag-to-build (MOUSEBUTTONDOWN / MOUSEMOTION / MOUSEBUTTONUP)
 
 Pembagian modul:
-  main.py         → (file ini)  inisialisasi, loop, event, render, state
-  pathfinding.py  → logika graf, algoritma BFS, reachability checker
-  entities.py     → class Tower, Enemy, Timer
+  main.py         -> inisialisasi, loop, event, render, state
+  pathfinding.py  -> logika graf, BFS, reachability
+  entities.py     -> Tower, Enemy, Timer
+  src/levels.py   -> konfigurasi level (no-build zones, pre-obstacles)
+  src/ui.py       -> Button, MainMenu, InstructionsScreen, LevelTransition
 """
 
 import pygame
@@ -21,228 +23,282 @@ import sys
 
 from pathfinding import find_shortest_path, is_path_exists
 from entities import Tower, Enemy, Timer
+from src.levels import LEVEL_CONFIGS, MAX_LEVEL, build_grid
+from src.ui import MainMenu, InstructionsScreen, LevelTransition
 
-# ─────────────────────────────────────────────
+# =============================================================================
 #  KONSTANTA
-# ─────────────────────────────────────────────
-SCREEN_W   = 800
-SCREEN_H   = 600
-CELL_SIZE  = 40
-COLS       = SCREEN_W // CELL_SIZE   # 20 kolom
-ROWS       = SCREEN_H // CELL_SIZE   # 15 baris
-
-SPAWN = (0,  7)   # (col, row) — kiri tengah
-BASE  = (19, 7)   # (col, row) — kanan tengah
+# =============================================================================
+SCREEN_W  = 800
+SCREEN_H  = 600
+CELL_SIZE = 40
+COLS      = SCREEN_W // CELL_SIZE   # 20
+ROWS      = SCREEN_H // CELL_SIZE   # 15
 
 FPS                  = 60
 ENEMY_SPAWN_INTERVAL = 120   # frame antar spawn musuh saat Battle Phase
-PREP_DURATION        = 20    # detik durasi Preparation Phase
 
-# ── Game States ──────────────────────────────
-STATE_PREP   = "prep"
-STATE_BATTLE = "battle"
-STATE_WIN    = "win"
-STATE_LOSE   = "lose"
+# -- Game States --------------------------------------------------------------
+STATE_MENU         = "menu"
+STATE_INSTRUCTIONS = "instructions"
+STATE_PREP         = "prep"
+STATE_BATTLE       = "battle"
+STATE_WIN          = "win"          # final win (level terakhir clear)
+STATE_LOSE         = "lose"
+STATE_LEVEL_TRANS  = "level_trans"  # level N clear -> transisi ke level N+1
 
-# Palet warna
-C_BG           = ( 28,  34,  42)
-C_CELL         = ( 40,  50,  60)
-C_GRID_LINE    = ( 55,  65,  75)
-C_PATH         = ( 60, 110, 170)
-C_SPAWN        = (  0, 190,  90)
-C_BASE         = (255, 160,   0)
-C_BLOCKED      = (200,  40,  40)
-C_HUD_TEXT     = (210, 210, 210)
-C_HUD_WARN     = (255, 100, 100)
-C_PANEL        = ( 20,  26,  34)
-C_WIN          = ( 50, 200, 100)
-C_LOSE         = (200,  50,  50)
-C_OVERLAY      = (  0,   0,   0, 170)
+# -- Palet Warna --------------------------------------------------------------
+C_BG        = ( 28,  34,  42)
+C_CELL      = ( 40,  50,  60)
+C_GRID_LINE = ( 55,  65,  75)
+C_PATH      = ( 60, 110, 170)
+C_SPAWN     = (  0, 190,  90)
+C_BASE      = (255, 160,   0)
+C_NO_BUILD  = ( 38,  55,  35)   # rawa / no-build zone (hijau tua gelap)
+C_HUD_TEXT  = (210, 210, 210)
+C_HUD_WARN  = (255, 100, 100)
+C_WIN       = ( 50, 200, 100)
+C_LOSE      = (200,  50,  50)
 
 
-# ─────────────────────────────────────────────
+# =============================================================================
 #  CLASS GAME
-# ─────────────────────────────────────────────
+# =============================================================================
 class Game:
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
         pygame.display.set_caption("Algorithmic Tower Defense  |  BFS Pathfinding")
-        self.clock  = pygame.time.Clock()
+        self.clock = pygame.time.Clock()
 
         self.font      = pygame.font.SysFont("consolas", 13)
         self.font_bold = pygame.font.SysFont("consolas", 15, bold=True)
 
-        # ── Grid ──────────────────────────────
-        # 0 = dapat dilalui,  1 = tower / rintangan
-        self.grid = [[0] * COLS for _ in range(ROWS)]
+        # -- UI screens -------------------------------------------------------
+        self.main_menu    = MainMenu(self.screen)
+        self.instr_screen = InstructionsScreen(self.screen)
+        self.level_trans  = None   # dibuat saat dibutuhkan
 
-        # ── Game objects ──────────────────────
-        self.towers  = []
-        self.enemies = []
+        # -- Game state -------------------------------------------------------
+        self.state         = STATE_MENU
+        self.current_level = 1
 
-        # ── Game State ────────────────────────
-        # Fase saat ini: prep → (battle atau win) → lose
-        self.state = STATE_PREP
+        # -- Level objects (diisi saat _load_level) ---------------------------
+        self.grid         = None
+        self.towers       = []
+        self.enemies      = []
+        self.timer        = None
+        self.spawn_pos    = None
+        self.base_pos     = None
+        self.no_build_set = set()
+        self.current_path = None
 
-        # Timer hitungan mundur Preparation Phase
-        self.timer = Timer(PREP_DURATION, FPS)
+        # -- Battle counters --------------------------------------------------
+        self.spawn_timer  = 0
+        self.enemies_lost = 0
 
-        # ── Battle counters ───────────────────
+        # -- Drag-to-build state ----------------------------------------------
+        self.dragging      = False
+        self.dragged_cells = set()   # sel yang sudah dipasang dalam 1 gesture drag
+
+    # =========================================================================
+    #  LOAD LEVEL
+    # =========================================================================
+    def _load_level(self, level_num):
+        """Inisialisasi semua state untuk level yang diberikan."""
+        cfg = LEVEL_CONFIGS[level_num]
+        self.current_level = level_num
+        self.spawn_pos     = cfg["spawn"]
+        self.base_pos      = cfg["base"]
+        self.no_build_set  = cfg["no_build_zones"]
+
+        self.grid      = build_grid(level_num)
+        self.towers    = []
+        self.enemies   = []
+        self.timer     = Timer(cfg["prep_duration"], FPS)
         self.spawn_timer   = 0
-        self.enemies_lost  = 0   # musuh yang berhasil mencapai Base
+        self.enemies_lost  = 0
+        self.dragging      = False
+        self.dragged_cells = set()
+        self.state         = STATE_PREP
 
-        # Hitung jalur awal (grid kosong → lurus horizontal)
-        self.current_path = find_shortest_path(self.grid, SPAWN, BASE, ROWS, COLS)
+        # Buat Tower visual untuk pre-placed obstacles
+        for (col, row) in cfg["pre_obstacles"]:
+            if 0 <= row < ROWS and 0 <= col < COLS:
+                self.towers.append(Tower(col, row, CELL_SIZE))
 
-    # ──────────────────────────────────────────
+        self.current_path = find_shortest_path(
+            self.grid, self.spawn_pos, self.base_pos, ROWS, COLS)
+
+    # =========================================================================
     #  EVENT HANDLING
-    # ──────────────────────────────────────────
+    # =========================================================================
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
 
-            if event.type == pygame.KEYDOWN:
-                # R = restart dari awal (berlaku di semua state)
-                if event.key == pygame.K_r:
-                    self._restart()
+            # ---- MENU -------------------------------------------------------
+            if self.state == STATE_MENU:
+                action = self.main_menu.handle_event(event)
+                if action == "start":
+                    self._load_level(1)
+                elif action == "instructions":
+                    self.state = STATE_INSTRUCTIONS
+                elif action == "exit":
+                    pygame.quit()
+                    sys.exit()
 
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                # Tower hanya bisa dipasang saat Preparation Phase
+            # ---- INSTRUCTIONS -----------------------------------------------
+            elif self.state == STATE_INSTRUCTIONS:
+                if self.instr_screen.handle_event(event):
+                    self.state = STATE_MENU
+
+            # ---- LEVEL TRANSITION -------------------------------------------
+            elif self.state == STATE_LEVEL_TRANS:
+                if self.level_trans and self.level_trans.handle_event(event):
+                    self._load_level(self.current_level + 1)
+
+            # ---- GAMEPLAY ---------------------------------------------------
+            else:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_r:
+                        self._load_level(self.current_level)
+                    if event.key == pygame.K_ESCAPE:
+                        self.state = STATE_MENU
+
+                # Drag-to-build (hanya saat PREP)
                 if self.state == STATE_PREP:
-                    mx, my = pygame.mouse.get_pos()
-                    gx = mx // CELL_SIZE
-                    gy = my // CELL_SIZE
-                    self.try_place_tower(gx, gy)
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        self.dragging      = True
+                        self.dragged_cells = set()
+                        mx, my = event.pos
+                        self.try_place_tower(mx // CELL_SIZE, my // CELL_SIZE)
 
-    # ──────────────────────────────────────────
-    #  RESTART
-    # ──────────────────────────────────────────
-    def _restart(self):
-        """Reset semua state ke kondisi awal (Preparation Phase)."""
-        self.grid        = [[0] * COLS for _ in range(ROWS)]
-        self.towers      = []
-        self.enemies     = []
-        self.state       = STATE_PREP
-        self.timer.reset(PREP_DURATION)
-        self.spawn_timer = 0
-        self.enemies_lost = 0
-        self.current_path = find_shortest_path(self.grid, SPAWN, BASE, ROWS, COLS)
+                    elif event.type == pygame.MOUSEMOTION and self.dragging:
+                        mx, my = event.pos
+                        self.try_place_tower(mx // CELL_SIZE, my // CELL_SIZE)
 
-    # ──────────────────────────────────────────
-    #  PENEMPATAN TOWER (+ VALIDASI BFS)
-    # ──────────────────────────────────────────
+                    elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                        self.dragging      = False
+                        self.dragged_cells = set()
+
+    # =========================================================================
+    #  PENEMPATAN TOWER
+    # =========================================================================
     def try_place_tower(self, gx, gy):
         """
-        Meletakkan tower di sel (gx, gy).
+        Pasang tower di sel (gx, gy).
 
         Validasi:
-        1. Pastikan bukan di Spawn / Base.
-        2. Pastikan sel belum terisi tower.
-        3. Simpan tower; perbarui jalur BFS jika masih ada.
+        1. Batas grid.
+        2. Bukan Spawn / Base.
+        3. Sel harus == 0 (bukan tower=1 dan bukan no-build zone=2).
+        4. Belum dipasang dalam gesture drag saat ini (anti-duplikat).
         """
-        # Guard: batas layar
         if not (0 <= gx < COLS and 0 <= gy < ROWS):
             return
-        # Guard: jangan timpa Spawn / Base
-        if (gx, gy) == SPAWN or (gx, gy) == BASE:
+        if (gx, gy) == self.spawn_pos or (gx, gy) == self.base_pos:
             return
-        # Guard: sudah ada tower
-        if self.grid[gy][gx] == 1:
+        if self.grid[gy][gx] != 0:   # 1=tower, 2=no-build zone
+            return
+        if (gx, gy) in self.dragged_cells:
             return
 
-        # Pasang tower
+        self.dragged_cells.add((gx, gy))
         self.grid[gy][gx] = 1
         self.towers.append(Tower(gx, gy, CELL_SIZE))
 
         # Perbarui jalur BFS (bisa None jika semua jalur terblokir)
-        new_path = find_shortest_path(self.grid, SPAWN, BASE, ROWS, COLS)
-        self.current_path = new_path
+        self.current_path = find_shortest_path(
+            self.grid, self.spawn_pos, self.base_pos, ROWS, COLS)
 
-        # Dynamic rerouting: perbarui jalur semua musuh aktif
+        # Dynamic rerouting semua musuh aktif
         for enemy in self.enemies:
             enemy.set_path(self.current_path)
 
-    # ──────────────────────────────────────────
+    # =========================================================================
     #  SPAWN MUSUH
-    # ──────────────────────────────────────────
+    # =========================================================================
     def spawn_enemy(self):
-        """Hasilkan musuh baru di SPAWN dengan jalur BFS terkini."""
-        path = find_shortest_path(self.grid, SPAWN, BASE, ROWS, COLS)
+        path = find_shortest_path(self.grid, self.spawn_pos, self.base_pos, ROWS, COLS)
         if path:
-            self.enemies.append(Enemy(SPAWN, CELL_SIZE, path))
+            self.enemies.append(Enemy(self.spawn_pos, CELL_SIZE, path))
 
-    # ──────────────────────────────────────────
+    # =========================================================================
     #  UPDATE (LOGIC)
-    # ──────────────────────────────────────────
+    # =========================================================================
     def update(self):
-        # ── PREPARATION PHASE ─────────────────
+        if self.state in (STATE_MENU, STATE_INSTRUCTIONS,
+                          STATE_LEVEL_TRANS, STATE_WIN, STATE_LOSE):
+            return
+
+        # -- PREPARATION PHASE ------------------------------------------------
         if self.state == STATE_PREP:
             self.timer.update()
-
-            # Timer habis → jalankan Reachability Check BFS
             if self.timer.finished:
                 self._evaluate_reachability()
             return
 
-        # ── BATTLE PHASE ──────────────────────
+        # -- BATTLE PHASE -----------------------------------------------------
         if self.state == STATE_BATTLE:
-            # Spawn musuh secara berkala
             self.spawn_timer += 1
             if self.spawn_timer >= ENEMY_SPAWN_INTERVAL:
                 self.spawn_timer = 0
                 self.spawn_enemy()
 
-            # Update pergerakan semua musuh
             for enemy in self.enemies:
                 enemy.update()
 
-            # Cek musuh yang mencapai Base → LOSE
             reached = [e for e in self.enemies if e.reached_base]
             if reached:
                 self.enemies_lost += len(reached)
                 self.state = STATE_LOSE
                 return
 
-            # Hapus musuh yang sudah selesai
             self.enemies = [e for e in self.enemies if not e.reached_base and e.alive]
 
-    # ──────────────────────────────────────────
+    # =========================================================================
     #  REACHABILITY CHECK (akhir Preparation Phase)
-    # ──────────────────────────────────────────
+    # =========================================================================
     def _evaluate_reachability(self):
         """
-        Dijalankan tepat saat timer Preparation Phase habis.
+        BFS Reachability Check saat timer PREP habis.
 
-        Logika BFS Reachability (sesuai syarat Quiz 2):
-        - Jalankan BFS dari SPAWN ke BASE pada grid yang sudah diisi tower.
-        - Jika node BASE tidak pernah masuk queue / tidak pernah di-visited
-          → Base tidak dapat dijangkau → PLAYER WIN.
-        - Jika BFS berhasil menemukan jalur ke BASE
-          → Base bisa dijangkau → transisi ke BATTLE PHASE.
+        Logika:
+        - BFS dari SPAWN ke BASE.
+        - BASE tidak pernah di-visited (no path) -> level clear:
+            * Bukan level terakhir -> STATE_LEVEL_TRANS
+            * Level terakhir       -> STATE_WIN
+        - Path masih ada -> STATE_BATTLE.
         """
-        path_exists = is_path_exists(self.grid, SPAWN, BASE, ROWS, COLS)
+        path_exists = is_path_exists(self.grid, self.spawn_pos, self.base_pos, ROWS, COLS)
 
         if not path_exists:
-            # BFS: Base tidak reachable → MENANG!
-            self.state = STATE_WIN
+            if self.current_level < MAX_LEVEL:
+                self.level_trans = LevelTransition(
+                    self.screen, self.current_level, self.current_level + 1)
+                self.state = STATE_LEVEL_TRANS
+            else:
+                self.state = STATE_WIN
         else:
-            # BFS: jalur masih ada → musuh akan menyerang → BATTLE
-            self.current_path = find_shortest_path(self.grid, SPAWN, BASE, ROWS, COLS)
+            self.current_path = find_shortest_path(
+                self.grid, self.spawn_pos, self.base_pos, ROWS, COLS)
             self.state = STATE_BATTLE
 
-    # ──────────────────────────────────────────
+    # =========================================================================
     #  RENDERING
-    # ──────────────────────────────────────────
+    # =========================================================================
     def draw_grid(self):
         """
-        Render setiap sel grid dengan warna berbeda:
-          - Biru  : jalur BFS saat ini
-          - Hijau : Spawn
-          - Oranye: Base
-          - Default: warna latar sel biasa
+        Warna sel:
+          2 (no-build zone) -> C_NO_BUILD (hijau tua gelap / rawa)
+          1 (tower)         -> C_CELL (tower visual digambar terpisah di atasnya)
+          in path_set       -> C_PATH (biru — jalur BFS aktif)
+          0 kosong          -> C_CELL
+          SPAWN             -> C_SPAWN (hijau)
+          BASE              -> C_BASE  (oranye)
         """
         path_set = set(self.current_path) if self.current_path else set()
 
@@ -251,59 +307,69 @@ class Game:
                 rect = pygame.Rect(col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE)
                 pos  = (col, row)
 
-                if pos == SPAWN:
+                if pos == self.spawn_pos:
                     pygame.draw.rect(self.screen, C_SPAWN, rect)
-                elif pos == BASE:
+                elif pos == self.base_pos:
                     pygame.draw.rect(self.screen, C_BASE, rect)
+                elif self.grid[row][col] == 2:
+                    # No-build zone: rawa — traversable oleh musuh, tidak bisa dibangun
+                    pygame.draw.rect(self.screen, C_NO_BUILD, rect)
                 elif self.grid[row][col] == 1:
-                    pygame.draw.rect(self.screen, C_CELL, rect)   # tower akan digambar di atas
+                    pygame.draw.rect(self.screen, C_CELL, rect)
                 elif pos in path_set:
                     pygame.draw.rect(self.screen, C_PATH, rect)
                 else:
                     pygame.draw.rect(self.screen, C_CELL, rect)
 
-                # Garis grid
                 pygame.draw.rect(self.screen, C_GRID_LINE, rect, 1)
 
-        # Label S / B
         def label(text, col, row, color=(0, 0, 0)):
             lbl = self.font_bold.render(text, True, color)
-            self.screen.blit(lbl, (col * CELL_SIZE + CELL_SIZE // 2 - lbl.get_width() // 2,
-                                   row * CELL_SIZE + CELL_SIZE // 2 - lbl.get_height() // 2))
+            self.screen.blit(lbl, (
+                col * CELL_SIZE + CELL_SIZE // 2 - lbl.get_width()  // 2,
+                row * CELL_SIZE + CELL_SIZE // 2 - lbl.get_height() // 2,
+            ))
 
-        label("S", *SPAWN)
-        label("B", *BASE)
+        label("S", *self.spawn_pos)
+        label("B", *self.base_pos)
 
     def draw_hud(self):
-        """Render panel informasi di pojok kiri atas (konten sesuai fase)."""
+        """HUD dinamis sesuai state."""
+        cfg        = LEVEL_CONFIGS[self.current_level]
+        level_name = cfg["name"]
+
         if self.state == STATE_PREP:
             lines = [
-                ("Tower Defense  —  BFS Pathfinding", C_HUD_TEXT, True),
-                (f"[ PREPARATION PHASE ]", C_WIN, True),
+                (f"[{level_name}]  BFS Tower Defense",  C_HUD_TEXT,     True),
+                ("[ PREPARATION PHASE ]",                C_WIN,          True),
                 (f"Waktu tersisa : {self.timer.seconds_left()}s", C_HUD_TEXT, False),
-                (f"Towers        : {len(self.towers)}", C_HUD_TEXT, False),
-                ("", C_HUD_TEXT, False),
-                ("Klik sel kosong = pasang tower", C_HUD_TEXT, False),
-                ("Blokir SEMUA jalur untuk menang!", C_WIN, False),
+                (f"Towers        : {len(self.towers)}",  C_HUD_TEXT,     False),
+                ("",                                     C_HUD_TEXT,     False),
+                ("Drag klik = bangun obstacle",          C_HUD_TEXT,     False),
+                ("Blokir SEMUA jalur untuk menang!",     C_WIN,          False),
+                ("Hijau tua = No-Build Zone",            (140, 180, 120), False),
+                ("R = Restart  |  ESC = Menu",           C_HUD_TEXT,     False),
             ]
         elif self.state == STATE_BATTLE:
             lines = [
-                ("Tower Defense  —  BFS Pathfinding", C_HUD_TEXT, True),
-                (f"[ BATTLE PHASE ]", C_HUD_WARN, True),
-                (f"Enemies aktif  : {len(self.enemies)}", C_HUD_TEXT, False),
-                (f"Reached Base   : {self.enemies_lost}", C_HUD_WARN if self.enemies_lost else C_HUD_TEXT, False),
-                ("", C_HUD_TEXT, False),
-                ("Musuh menuju Base!", C_HUD_WARN, False),
+                (f"[{level_name}]  BFS Tower Defense",  C_HUD_TEXT,     True),
+                ("[ BATTLE PHASE ]",                     C_HUD_WARN,     True),
+                (f"Enemies aktif : {len(self.enemies)}", C_HUD_TEXT,     False),
+                (f"Reached Base  : {self.enemies_lost}",
+                    C_HUD_WARN if self.enemies_lost else C_HUD_TEXT,     False),
+                ("",                                     C_HUD_TEXT,     False),
+                ("Musuh menuju Base!",                   C_HUD_WARN,     False),
+                ("R = Restart  |  ESC = Menu",           C_HUD_TEXT,     False),
             ]
         else:
             lines = [
-                ("Tower Defense  —  BFS Pathfinding", C_HUD_TEXT, True),
-                (f"Towers  : {len(self.towers)}", C_HUD_TEXT, False),
+                (f"[{level_name}]  BFS Tower Defense",  C_HUD_TEXT,     True),
+                ("R = Restart  |  ESC = Menu",           C_HUD_TEXT,     False),
             ]
 
         pad = 8
-        bg  = pygame.Surface((270, len(lines) * 17 + pad * 2), pygame.SRCALPHA)
-        bg.fill((0, 0, 0, 140))
+        bg  = pygame.Surface((295, len(lines) * 17 + pad * 2), pygame.SRCALPHA)
+        bg.fill((0, 0, 0, 145))
         self.screen.blit(bg, (0, 0))
 
         for i, (text, color, bold) in enumerate(lines):
@@ -311,15 +377,24 @@ class Game:
             lbl  = font.render(text, True, color)
             self.screen.blit(lbl, (pad, pad + i * 17))
 
-    # ──────────────────────────────────────────
-    #  OVERLAY WIN / LOSE
-    # ──────────────────────────────────────────
+    def draw_timer_bar(self):
+        """Progress bar hitungan mundur di bawah layar (hanya saat PREP)."""
+        if self.state != STATE_PREP or not self.timer:
+            return
+        bar_w = int(SCREEN_W * (1.0 - self.timer.progress()))
+        bar_h = 8
+        bar_y = SCREEN_H - bar_h
+        pygame.draw.rect(self.screen, (50, 50, 60), (0, bar_y, SCREEN_W, bar_h))
+        ratio = 1.0 - self.timer.progress()
+        r_val = int(255 * (1 - ratio))
+        g_val = int(255 * ratio)
+        pygame.draw.rect(self.screen, (r_val, g_val, 40), (0, bar_y, bar_w, bar_h))
+
     def draw_overlay(self):
-        """Render layar Win atau Lose di atas game."""
+        """WIN / LOSE overlay di atas gameplay."""
         if self.state not in (STATE_WIN, STATE_LOSE):
             return
 
-        # Layer transparan gelap
         overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 170))
         self.screen.blit(overlay, (0, 0))
@@ -328,73 +403,64 @@ class Game:
         font_small = pygame.font.SysFont("consolas", 22)
 
         if self.state == STATE_WIN:
-            title_text = "YOU WIN!"
+            title_text  = "YOU WIN!"
             title_color = C_WIN
-            sub_text = "BFS: Base tidak dapat dijangkau musuh."
-            sub_color = (180, 255, 180)
+            sub_text    = "BFS: Semua jalur berhasil diblokir!"
+            sub_color   = (180, 255, 180)
         else:
-            title_text = "YOU LOSE"
+            title_text  = "YOU LOSE"
             title_color = C_LOSE
-            sub_text = f"Musuh berhasil mencapai Base!"
-            sub_color = (255, 180, 180)
+            sub_text    = "Musuh berhasil mencapai Base!"
+            sub_color   = (255, 180, 180)
 
         title = font_big.render(title_text, True, title_color)
         sub   = font_small.render(sub_text, True, sub_color)
-        hint  = font_small.render("Tekan R untuk main lagi", True, C_HUD_TEXT)
+        hint  = font_small.render("R = Restart  |  ESC = Menu Utama", True, C_HUD_TEXT)
 
         cx = SCREEN_W // 2
         cy = SCREEN_H // 2
-        self.screen.blit(title, (cx - title.get_width() // 2, cy - 80))
-        self.screen.blit(sub,   (cx - sub.get_width() // 2,   cy + 10))
-        self.screen.blit(hint,  (cx - hint.get_width() // 2,  cy + 55))
+        self.screen.blit(title, (cx - title.get_width()  // 2, cy - 80))
+        self.screen.blit(sub,   (cx - sub.get_width()    // 2, cy + 10))
+        self.screen.blit(hint,  (cx - hint.get_width()   // 2, cy + 55))
 
-    # ──────────────────────────────────────────
-    #  PREP PHASE TIMER BAR
-    # ──────────────────────────────────────────
-    def draw_timer_bar(self):
-        """Bar hitungan mundur di bagian bawah layar (hanya saat PREP)."""
-        if self.state != STATE_PREP:
-            return
-        bar_w  = int(SCREEN_W * (1.0 - self.timer.progress()))
-        bar_h  = 8
-        bar_y  = SCREEN_H - bar_h
-        # Background
-        pygame.draw.rect(self.screen, (50, 50, 60), (0, bar_y, SCREEN_W, bar_h))
-        # Bar: hijau → merah seiring waktu habis
-        ratio   = 1.0 - self.timer.progress()
-        r_val   = int(255 * (1 - ratio))
-        g_val   = int(255 * ratio)
-        pygame.draw.rect(self.screen, (r_val, g_val, 40), (0, bar_y, bar_w, bar_h))
-
-    # ──────────────────────────────────────────
+    # =========================================================================
     #  GAME LOOP UTAMA
-    # ──────────────────────────────────────────
+    # =========================================================================
     def run(self):
         while True:
             self.handle_events()
             self.update()
 
-            self.screen.fill(C_BG)
+            if self.state == STATE_MENU:
+                self.main_menu.draw()
 
-            self.draw_grid()
+            elif self.state == STATE_INSTRUCTIONS:
+                self.instr_screen.draw()
 
-            for tower in self.towers:
-                tower.draw(self.screen)
+            elif self.state == STATE_LEVEL_TRANS:
+                if self.level_trans:
+                    self.level_trans.draw()
 
-            for enemy in self.enemies:
-                enemy.draw(self.screen)
-
-            self.draw_hud()
-            self.draw_timer_bar()
-            self.draw_overlay()   # WIN / LOSE screen (hanya saat state terkait)
+            else:
+                # Gameplay: PREP / BATTLE / WIN / LOSE
+                self.screen.fill(C_BG)
+                if self.grid:
+                    self.draw_grid()
+                    for tower in self.towers:
+                        tower.draw(self.screen)
+                    for enemy in self.enemies:
+                        enemy.draw(self.screen)
+                    self.draw_hud()
+                    self.draw_timer_bar()
+                    self.draw_overlay()
 
             pygame.display.flip()
             self.clock.tick(FPS)
 
 
-# ─────────────────────────────────────────────
+# =============================================================================
 #  ENTRY POINT
-# ─────────────────────────────────────────────
+# =============================================================================
 if __name__ == "__main__":
     game = Game()
     game.run()

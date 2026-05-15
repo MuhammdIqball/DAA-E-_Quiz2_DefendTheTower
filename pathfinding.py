@@ -79,7 +79,7 @@ def find_shortest_path(grid, start, end, rows, cols):
             # Cek batas grid
             if 0 <= nx < cols and 0 <= ny < rows:
                 # Masukkan ke antrian hanya jika belum dikunjungi DAN bisa dilewati
-                if (nx, ny) not in visited and grid[ny][nx] == 0:
+                if (nx, ny) not in visited and grid[ny][nx] != 1:
                     visited[(nx, ny)] = current  # Catat parent
                     queue.append((nx, ny))
 
