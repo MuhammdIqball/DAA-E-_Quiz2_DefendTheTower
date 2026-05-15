@@ -27,7 +27,6 @@ import time
 from pathfinding import find_shortest_path, dijkstra
 from entities import Tower
 from src.levels import LEVEL_CONFIGS, MAX_LEVEL, build_grid
-from src.ui import MainMenu, LevelTransition
 
 # =============================================================================
 #  KONSTANTA
@@ -41,11 +40,9 @@ ROWS      = SCREEN_H // CELL_SIZE   # 15
 FPS = 60
 
 # -- Game States --------------------------------------------------------------
-STATE_MENU         = "menu"
-STATE_PREP         = "prep"
-STATE_WIN          = "win"
-STATE_LOSE         = "lose"
-STATE_LEVEL_TRANS  = "level_trans"
+STATE_PREP  = "prep"
+STATE_WIN   = "win"
+STATE_LOSE  = "lose"
 
 # -- Palet Warna --------------------------------------------------------------
 C_BG        = ( 28,  34,  42)
@@ -79,12 +76,8 @@ class Game:
         self.font      = pygame.font.SysFont("consolas", 13)
         self.font_bold = pygame.font.SysFont("consolas", 15, bold=True)
 
-        # -- UI screens -------------------------------------------------------
-        self.main_menu   = MainMenu(self.screen)
-        self.level_trans = None
-
         # -- Game state -------------------------------------------------------
-        self.state         = STATE_MENU
+        self.state         = STATE_PREP
         self.current_level = 1
 
         # -- Level objects (diisi saat _load_level) ---------------------------
@@ -104,6 +97,9 @@ class Game:
         # -- Drag-to-build state ----------------------------------------------
         self.dragging      = False
         self.dragged_cells = set()
+
+        # Mulai langsung di Level 1
+        self._load_level(1)
 
     # =========================================================================
     #  LOAD LEVEL
@@ -140,51 +136,39 @@ class Game:
                 pygame.quit()
                 sys.exit()
 
-            # ---- MENU -------------------------------------------------------
-            if self.state == STATE_MENU:
-                action = self.main_menu.handle_event(event)
-                if action == "start":
-                    self._load_level(1)
-                elif action == "exit":
-                    pygame.quit()
-                    sys.exit()
-
             # ---- LEVEL TRANSITION -------------------------------------------
-            elif self.state == STATE_LEVEL_TRANS:
-                if self.level_trans and self.level_trans.handle_event(event):
-                    self._load_level(self.current_level + 1)
+            # (removed — level-clear auto-advances in _evaluate_puzzle)
 
             # ---- GAMEPLAY ---------------------------------------------------
-            else:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_r:
-                        self._load_level(self.current_level)
-                    elif event.key == pygame.K_ESCAPE:
-                        self.state = STATE_MENU
-                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        if self.state == STATE_PREP:
-                            self._evaluate_puzzle()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    self._load_level(self.current_level)
+                elif event.key == pygame.K_ESCAPE:
+                    self._load_level(1)   # ESC = kembali ke Level 1
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    if self.state == STATE_PREP:
+                        self._evaluate_puzzle()
 
-                if self.state == STATE_PREP:
-                    # -- Klik kiri: drag-to-build ----------------------------
-                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                        self.dragging      = True
-                        self.dragged_cells = set()
-                        mx, my = event.pos
-                        self.try_place_tower(mx // CELL_SIZE, my // CELL_SIZE)
+            if self.state == STATE_PREP:
+                # -- Klik kiri: drag-to-build ----------------------------
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    self.dragging      = True
+                    self.dragged_cells = set()
+                    mx, my = event.pos
+                    self.try_place_tower(mx // CELL_SIZE, my // CELL_SIZE)
 
-                    elif event.type == pygame.MOUSEMOTION and self.dragging:
-                        mx, my = event.pos
-                        self.try_place_tower(mx // CELL_SIZE, my // CELL_SIZE)
+                elif event.type == pygame.MOUSEMOTION and self.dragging:
+                    mx, my = event.pos
+                    self.try_place_tower(mx // CELL_SIZE, my // CELL_SIZE)
 
-                    elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                        self.dragging      = False
-                        self.dragged_cells = set()
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    self.dragging      = False
+                    self.dragged_cells = set()
 
-                    # -- Klik kanan: hapus blok yang dipasang pemain ----------
-                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-                        mx, my = event.pos
-                        self.try_remove_tower(mx // CELL_SIZE, my // CELL_SIZE)
+                # -- Klik kanan: hapus blok yang dipasang pemain ----------
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+                    mx, my = event.pos
+                    self.try_remove_tower(mx // CELL_SIZE, my // CELL_SIZE)
 
     # =========================================================================
     #  PENEMPATAN BLOK (klik kiri)
@@ -274,9 +258,7 @@ class Game:
         if result is None:
             # Dijkstra: Base tidak reachable → level clear!
             if self.current_level < MAX_LEVEL:
-                self.level_trans = LevelTransition(
-                    self.screen, self.current_level, self.current_level + 1)
-                self.state = STATE_LEVEL_TRANS
+                self._load_level(self.current_level + 1)  # langsung lanjut
             else:
                 self.state = STATE_WIN
         else:
@@ -356,26 +338,15 @@ class Game:
                 (level_name,                             C_HUD_TEXT,  True),
                 (f"Blok tersisa : {self.blocks_remaining} / {self.block_count_max}",
                                                          C_HUD_TEXT,  False),
-                ("",                                     C_HUD_TEXT,  False),
-                (hint,                                   C_HUD_HINT,  False),
-                ("",                                     C_HUD_TEXT,  False),
-                ("Klik kiri  = pasang blok",             C_HUD_TEXT,  False),
-                ("Klik kanan = hapus blok",              C_HUD_TEXT,  False),
-                ("ENTER      = evaluasi sekarang",       C_HUD_TEXT,  False),
-                ("R = Restart  |  ESC = Menu",           C_HUD_TEXT,  False),
             ]
         elif self.state == STATE_LOSE:
             lines = [
                 (level_name,                             C_HUD_TEXT,  True),
-                ("Jalur merah = rute musuh ditemukan",   C_HUD_WARN,  False),
                 ("Dijkstra masih menemukan jalan!",      C_HUD_WARN,  False),
-                ("",                                     C_HUD_TEXT,  False),
-                ("R = Coba lagi  |  ESC = Menu",         C_HUD_TEXT,  False),
             ]
         else:
             lines = [
                 (level_name,                             C_HUD_TEXT,  True),
-                ("R = Restart  |  ESC = Menu",           C_HUD_TEXT,  False),
             ]
 
         pad = 8
@@ -440,7 +411,7 @@ class Game:
         title = font_big.render(title_text,  True, title_color)
         sub   = font_small.render(sub_text,  True, sub_color)
         hint1 = font_small.render("Jalur merah = rute yang ditemukan Dijkstra.", True, (200, 150, 130))
-        hint2 = font_small.render("R = Coba lagi  |  ESC = Menu Utama", True, C_HUD_TEXT)
+        hint2 = font_small.render("R / ESC = Main ulang dari Level 1", True, C_HUD_TEXT)
 
         # Waktu eksekusi Dijkstra
         if self.dijkstra_time_ms is not None:
@@ -468,22 +439,14 @@ class Game:
             self.handle_events()
             self.update()
 
-            if self.state == STATE_MENU:
-                self.main_menu.draw()
-
-            elif self.state == STATE_LEVEL_TRANS:
-                if self.level_trans:
-                    self.level_trans.draw()
-
-            else:
-                self.screen.fill(C_BG)
-                if self.grid:
-                    self.draw_grid()
-                    for tower in self.towers:
-                        tower.draw(self.screen)
-                    self.draw_hud()
-                    self.draw_inventory()
-                    self.draw_overlay()
+            self.screen.fill(C_BG)
+            if self.grid:
+                self.draw_grid()
+                for tower in self.towers:
+                    tower.draw(self.screen)
+                self.draw_hud()
+                self.draw_inventory()
+                self.draw_overlay()
 
             pygame.display.flip()
             self.clock.tick(FPS)
