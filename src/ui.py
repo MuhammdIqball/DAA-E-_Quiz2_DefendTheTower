@@ -87,7 +87,7 @@ class MainMenu:
         title = self.font_title.render("Tower Defense", True, C_TITLE)
         self.screen.blit(title, (SCREEN_W // 2 - title.get_width() // 2, 110))
 
-        sub = self.font_sub.render("BFS Pathfinding  |  DAA Quiz 2", True, C_MUTED)
+        sub = self.font_sub.render("BFS + Dijkstra Puzzle  |  DAA Quiz 2", True, C_MUTED)
         self.screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 178))
 
         self.btn_start.draw(self.screen)
@@ -102,30 +102,37 @@ class InstructionsScreen:
     """Layar petunjuk cara bermain."""
 
     LINES = [
-        ("CARA BERMAIN",                                         (50, 200, 100), True),
+        ("CARA BERMAIN  —  Dijkstra Bottleneck Puzzle",          (50, 200, 100), True),
         ("",                                                     None,           False),
-        ("PREPARATION PHASE:",                                   (180, 220, 255), False),
-        ("  Drag klik kiri untuk membangun rintangan (obstacle)", C_TEXT,        False),
-        ("  Tujuan: blokir SEMUA jalur dari Spawn ke Base",       (50,200,100),  False),
-        ("  Area HIJAU     = Spawn (titik asal musuh)",           C_TEXT,        False),
-        ("  Area ORANYE    = Base  (target musuh)",               C_TEXT,        False),
-        ("  Area HIJAU TUA = No-Build Zone (rawa — bisa dilalui, tapi tak bisa dibangun)",
-                                                                 (140,180,120),  False),
+        ("TUJUAN:",                                              (180, 220, 255), False),
+        ("  Gunakan blok terbatas untuk memutus SEMUA jalur",     C_TEXT,        False),
+        ("  dari Spawn ke Base. Tidak ada musuh, tidak ada timer.", C_TEXT,      False),
+        ("  Evaluasi dilakukan oleh algoritma Dijkstra.",         (50,200,100),  False),
         ("",                                                     None,           False),
-        ("BATTLE PHASE (saat timer habis):",                     (180, 220, 255), False),
-        ("  BFS dijalankan: jika Base tidak reachable → MENANG", (50, 200, 100), False),
-        ("  Jika jalur masih ada → musuh menyerang",             C_TEXT,        False),
-        ("  Musuh mencapai Base → KALAH",                        (255,100,100), False),
+        ("KONDISI MENANG:",                                      (180, 220, 255), False),
+        ("  Dijkstra: Base tidak dapat dijangkau → Level Clear!", (50, 200, 100), False),
+        ("KONDISI KALAH:",                                       (180, 220, 255), False),
+        ("  Dijkstra masih menemukan jalur ke Base → LOSE.",      (255,100,100), False),
+        ("  Jalur merah = rute kebocoran yang ditemukan Dijkstra.", (255,150,100), False),
+        ("",                                                     None,           False),
+        ("LEGENDA GRID:",                                        (180, 220, 255), False),
+        ("  Hijau       = Spawn (titik asal musuh)",              C_TEXT,        False),
+        ("  Oranye      = Base (target musuh)",                   C_TEXT,        False),
+        ("  Abu terang  = Dinding permanen (tidak bisa dihapus)", C_TEXT,        False),
+        ("  Biru        = Jalur BFS saat ini (preview real-time)", C_TEXT,       False),
+        ("  Merah-oranye= Jalur Dijkstra saat KALAH",             (255,150,100), False),
         ("",                                                     None,           False),
         ("LEVEL:",                                               (180, 220, 255), False),
-        ("  Level 1: rawa di dekat Base (kanan)",                 C_TEXT,        False),
-        ("  Level 2: rawa di dekat Base DAN Spawn + rintangan bawaan",
-                                                                  C_TEXT,        False),
+        ("  Level 1 (1 blok)  : The Gateway — satu celah di tengah", C_TEXT,    False),
+        ("  Level 2 (2 blok)  : Twin Gaps   — dua celah di dinding", C_TEXT,    False),
+        ("  Level 3 (2 blok)  : Crossroads  — dua dinding, dua celah berbeda", C_TEXT, False),
         ("",                                                     None,           False),
         ("KONTROL:",                                             (180, 220, 255), False),
-        ("  Drag klik kiri = bangun obstacle",                    C_TEXT,        False),
-        ("  R             = Restart level",                       C_TEXT,        False),
-        ("  ESC           = Kembali ke menu",                     C_TEXT,        False),
+        ("  Klik/Drag kiri = pasang blok",                        C_TEXT,        False),
+        ("  Klik kanan     = hapus blok (dinding permanen tidak bisa)", C_TEXT,  False),
+        ("  ENTER/SPACE    = evaluasi puzzle sekarang",           C_TEXT,        False),
+        ("  R              = Restart level",                      C_TEXT,        False),
+        ("  ESC            = Kembali ke menu",                    C_TEXT,        False),
     ]
 
     def __init__(self, screen):
@@ -196,7 +203,7 @@ class LevelTransition:
         title = self.font_big.render(f"Level {self.from_level} Clear!", True, (50, 220, 100))
         self.screen.blit(title, (cx - title.get_width() // 2, 175))
 
-        sub = self.font_mid.render("BFS: Semua jalur berhasil diblokir!", True, (180, 255, 180))
+        sub = self.font_mid.render("Dijkstra: Semua jalur berhasil diblokir!", True, (180, 255, 180))
         self.screen.blit(sub, (cx - sub.get_width() // 2, 270))
 
         hint = self.font_mid.render(

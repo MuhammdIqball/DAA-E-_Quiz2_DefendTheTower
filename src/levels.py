@@ -1,80 +1,87 @@
 """
-levels.py
-=========
-Konfigurasi grid untuk setiap level.
+levels.py  (Puzzle Mode)
+========================
+Konfigurasi setiap level sebagai PUZZLE BOTTLENECK.
+
+Representasi graf:
+  Sel = node,  edge antara sel bertetangga (4-arah) yang bisa dilalui.
 
 Nilai sel grid:
-  0 = kosong          (traversable oleh musuh, buildable oleh pemain)
-  1 = obstacle/tower  (NOT traversable, NOT buildable)
-  2 = no-build zone   (traversable oleh musuh, NOT buildable oleh pemain)
+  0 = kosong          (traversable, buildable oleh pemain)
+  1 = obstacle tetap  (NOT traversable, NOT buildable)
+  2 = no-build zone   (traversable oleh musuh, NOT buildable)
 
-No-build zones direpresentasikan sebagai "rawa" atau "hutan" yang bisa
-dilalui musuh tetapi tidak bisa dibangun rintangan di atasnya.
-Ini memaksa pemain mencari cut-set di area yang lebih terbatas.
+Setiap level memiliki:
+  - pre_obstacles : rintangan permanen yang membentuk "funnel" / bottleneck
+  - block_count   : jumlah blok yang BOLEH dipasang pemain
+  - hint          : teks petunjuk yang ditampilkan di HUD
+
+Pemain menang  → Dijkstra mengembalikan None (tidak ada jalur).
+Pemain kalah   → Dijkstra masih menemukan jalur setelah semua blok habis.
 """
 
 COLS = 20
 ROWS = 15
 
+# =============================================================================
+#  LEVEL 1 — "The Gateway"
+#  Satu dinding vertikal di col 9, satu celah di row 7 (tepat di tengah).
+#  Semua jalur HARUS melewati (9, 7).
+#  Solusi: blokir (9, 7)  →  1 blok.
+# =============================================================================
+_L1_PRE = [(9, r) for r in range(ROWS) if r != 7]
 
-def _rect(col_start, col_end, row_start, row_end):
-    """Buat set koordinat (col, row) dari rentang persegi panjang."""
-    return {
-        (c, r)
-        for r in range(row_start, row_end + 1)
-        for c in range(col_start, col_end + 1)
-    }
+# =============================================================================
+#  LEVEL 2 — "Twin Gaps"
+#  Dinding vertikal di col 9, dua celah di row 3 dan row 11.
+#  Jalur atas melewati (9, 3); jalur bawah melewati (9, 11).
+#  Solusi: blokir keduanya  →  2 blok.
+# =============================================================================
+_L2_PRE = [(9, r) for r in range(ROWS) if r not in (3, 11)]
 
-
-# ─────────────────────────────────────────────
-#  LEVEL 1 — No-Build Zone di dekat BASE (kanan)
-# ─────────────────────────────────────────────
-# Rawa di pojok kanan-atas dan kanan-bawah.
-# Musuh BISA lewat, pemain TIDAK BISA bangun di area ini.
-# Tujuan: pemain harus memblokir di area tengah/kiri (cols 1–14).
-_L1_NO_BUILD = (
-    _rect(15, 18,  0,  4) |   # rawa kanan-atas
-    _rect(15, 18, 10, 14)     # rawa kanan-bawah
+# =============================================================================
+#  LEVEL 3 — "The Crossroads"
+#  Dua dinding vertikal di col 6 dan col 13.
+#    - Col  6: satu celah di row 4
+#    - Col 13: satu celah di row 10
+#  Bottleneck berada di ketinggian BERBEDA — jalur harus zig-zag.
+#  Solusi: blokir (6, 4) DAN (13, 10)  →  2 blok.
+# =============================================================================
+_L3_PRE = (
+    [(6,  r) for r in range(ROWS) if r != 4] +
+    [(13, r) for r in range(ROWS) if r != 10]
 )
 
-# ─────────────────────────────────────────────
-#  LEVEL 2 — No-Build Zone di KEDUA sisi (lebih sulit)
-# ─────────────────────────────────────────────
-# Tambah rawa di pojok kiri (dekat SPAWN) — area buildable makin sempit.
-# Pemain HARUS memblokir di kolom 5–14 saja.
-_L2_NO_BUILD = (
-    _L1_NO_BUILD              |   # semua rawa Level 1
-    _rect( 1,  4,  0,  4)    |   # rawa kiri-atas
-    _rect( 1,  4, 10, 14)        # rawa kiri-bawah
-)
-
-# Level 2: dinding parsial bawaan di kolom 9 (atas & bawah)
-# Menciptakan "funnel" — musuh harus lewat baris 3–11 di col 9.
-# Membuat cut-set lebih sulit ditemukan.
-_L2_PRE_OBSTACLES = [
-    *[(9, r) for r in range(0, 3)],    # col 9, baris 0–2
-    *[(9, r) for r in range(12, 15)],  # col 9, baris 12–14
-]
-
-# ─────────────────────────────────────────────
+# =============================================================================
 #  REGISTRY LEVEL
-# ─────────────────────────────────────────────
+# =============================================================================
 LEVEL_CONFIGS = {
     1: {
-        "name"          : "Level 1",
+        "name"          : "Level 1 — The Gateway",
+        "hint"          : "Satu dinding, satu celah. Tutup celah itu!",
         "spawn"         : (0,  7),
         "base"          : (19, 7),
-        "prep_duration" : 20,
-        "no_build_zones": _L1_NO_BUILD,
-        "pre_obstacles" : [],
+        "block_count"   : 1,
+        "pre_obstacles" : _L1_PRE,
+        "no_build_zones": set(),
     },
     2: {
-        "name"          : "Level 2",
+        "name"          : "Level 2 — Twin Gaps",
+        "hint"          : "Dua celah di dinding. Butuh 2 blok untuk menutup keduanya.",
         "spawn"         : (0,  7),
         "base"          : (19, 7),
-        "prep_duration" : 25,
-        "no_build_zones": _L2_NO_BUILD,
-        "pre_obstacles" : _L2_PRE_OBSTACLES,
+        "block_count"   : 2,
+        "pre_obstacles" : _L2_PRE,
+        "no_build_zones": set(),
+    },
+    3: {
+        "name"          : "Level 3 — The Crossroads",
+        "hint"          : "Dua dinding, celah di ketinggian berbeda. Temukan bottleneck!",
+        "spawn"         : (0,  7),
+        "base"          : (19, 7),
+        "block_count"   : 2,
+        "pre_obstacles" : _L3_PRE,
+        "no_build_zones": set(),
     },
 }
 
@@ -88,19 +95,17 @@ def build_grid(level_num):
     Kembalian:
     ----------
     list[list[int]]: grid[row][col]
-        0 = kosong
-        1 = pre-placed obstacle
-        2 = no-build zone
+      0 = kosong
+      1 = obstacle permanen
+      2 = no-build zone
     """
     cfg  = LEVEL_CONFIGS[level_num]
     grid = [[0] * COLS for _ in range(ROWS)]
 
-    # Pasang no-build zones (nilai 2)
-    for (col, row) in cfg["no_build_zones"]:
+    for (col, row) in cfg.get("no_build_zones", set()):
         if 0 <= row < ROWS and 0 <= col < COLS:
             grid[row][col] = 2
 
-    # Pasang pre-placed obstacles (nilai 1)
     for (col, row) in cfg["pre_obstacles"]:
         if 0 <= row < ROWS and 0 <= col < COLS:
             grid[row][col] = 1
